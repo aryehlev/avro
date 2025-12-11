@@ -1,4 +1,4 @@
-module github.com/hamba/avro/v2
+module github.com/aryehlev/avro/v2
 
 go 1.24.0
 

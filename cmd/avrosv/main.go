@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/hamba/avro/v2"
+	"github.com/aryehlev/avro/v2"
 )
 
 type config struct {
