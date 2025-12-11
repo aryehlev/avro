@@ -33,6 +33,10 @@ type codecOptions struct {
 type zstdOptions struct {
 	EOptions []zstd.EOption
 	DOptions []zstd.DOption
+	// Encoder and Decoder allow sharing pre-created instances across multiple codecs.
+	// When set, EOptions/DOptions are ignored for that component.
+	Encoder *zstd.Encoder
+	Decoder *zstd.Decoder
 }
 
 func resolveCodec(name CodecName, codecOpts codecOptions) (Codec, error) {
@@ -146,13 +150,30 @@ type ZStandardCodec struct {
 	encoderOnce sync.Once
 	eOpts       []zstd.EOption
 	dOpts       []zstd.DOption
+	// ownsEncoder/ownsDecoder track whether we created these and should close them.
+	ownsEncoder bool
+	ownsDecoder bool
 }
 
 func newZStandardCodec(opts zstdOptions) *ZStandardCodec {
-	return &ZStandardCodec{
+	c := &ZStandardCodec{
 		eOpts: opts.EOptions,
 		dOpts: opts.DOptions,
 	}
+	// Use shared encoder/decoder if provided.
+	if opts.Encoder != nil {
+		c.encoder = opts.Encoder
+		c.encoderOnce.Do(func() {}) // Mark as initialized
+	} else {
+		c.ownsEncoder = true
+	}
+	if opts.Decoder != nil {
+		c.decoder = opts.Decoder
+		c.decoderOnce.Do(func() {}) // Mark as initialized
+	} else {
+		c.ownsDecoder = true
+	}
+	return c
 }
 
 // Decode decodes the given bytes.
@@ -160,7 +181,6 @@ func (c *ZStandardCodec) Decode(b []byte) ([]byte, error) {
 	c.decoderOnce.Do(func() {
 		c.decoder, _ = zstd.NewReader(nil, c.dOpts...)
 	})
-	defer func() { _ = c.decoder.Reset(nil) }()
 	return c.decoder.DecodeAll(b, nil)
 }
 
@@ -169,16 +189,16 @@ func (c *ZStandardCodec) Encode(b []byte) []byte {
 	c.encoderOnce.Do(func() {
 		c.encoder, _ = zstd.NewWriter(nil, c.eOpts...)
 	})
-	defer c.encoder.Reset(nil)
 	return c.encoder.EncodeAll(b, nil)
 }
 
 // Close closes the zstandard encoder and decoder, releasing resources.
+// If the encoder/decoder were provided externally (shared), they are not closed.
 func (c *ZStandardCodec) Close() error {
-	if c.decoder != nil {
+	if c.decoder != nil && c.ownsDecoder {
 		c.decoder.Close()
 	}
-	if c.encoder != nil {
+	if c.encoder != nil && c.ownsEncoder {
 		return c.encoder.Close()
 	}
 	return nil

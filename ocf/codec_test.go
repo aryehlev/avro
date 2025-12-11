@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,4 +103,61 @@ func makeTestData(length int, charMaker func() byte) []byte {
 		input[i] = charMaker()
 	}
 	return input
+}
+
+func TestZstdSharedEncoder(t *testing.T) {
+	input := makeTestData(8762, func() byte { return 'a' })
+
+	// Create shared encoder/decoder
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	require.NoError(t, err)
+	defer enc.Close()
+
+	dec, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer dec.Close()
+
+	// Create two codecs sharing the same encoder/decoder
+	codec1, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{
+			Encoder: enc,
+			Decoder: dec,
+		},
+	})
+	require.NoError(t, err)
+
+	codec2, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{
+			Encoder: enc,
+			Decoder: dec,
+		},
+	})
+	require.NoError(t, err)
+
+	// Both should work correctly
+	compressed1 := codec1.Encode(input)
+	compressed2 := codec2.Encode(input)
+
+	actual1, err := codec1.Decode(compressed1)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual1)
+
+	actual2, err := codec2.Decode(compressed2)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual2)
+
+	// Cross-decode should also work
+	actual3, err := codec1.Decode(compressed2)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual3)
+
+	// Closing codecs should not close the shared encoder/decoder
+	codec1.(*ZStandardCodec).Close()
+	codec2.(*ZStandardCodec).Close()
+
+	// Shared encoder should still work after codec close
+	compressed3 := enc.EncodeAll(input, nil)
+	actual4, err := dec.DecodeAll(compressed3, nil)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual4)
 }
