@@ -59,14 +59,16 @@ BenchmarkZstdEncodeDecodeHighEntropyLong-8   	   47652	     25064 ns/op	   31553
 func BenchmarkZstdEncodeDecodeLowEntropyLong(b *testing.B) {
 	input := makeTestData(8762, func() byte { return 'a' })
 
-	codec, err := resolveCodec(ZStandard, codecOptions{})
+	encoder, err := resolveCodec(ZStandard, codecOptions{}, codecModeEncode)
+	require.NoError(b, err)
+	decoder, err := resolveCodec(ZStandard, codecOptions{}, codecModeDecode)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		compressed := codec.Encode(input)
-		_, decodeErr := codec.Decode(compressed)
+		compressed := encoder.Encode(input)
+		_, decodeErr := decoder.Decode(compressed)
 		require.NoError(b, decodeErr)
 	}
 }
@@ -74,24 +76,28 @@ func BenchmarkZstdEncodeDecodeLowEntropyLong(b *testing.B) {
 func BenchmarkZstdEncodeDecodeHighEntropyLong(b *testing.B) {
 	input := makeTestData(8762, func() byte { return byte(rand.Uint32()) })
 
-	codec, err := resolveCodec(ZStandard, codecOptions{})
+	encoder, err := resolveCodec(ZStandard, codecOptions{}, codecModeEncode)
+	require.NoError(b, err)
+	decoder, err := resolveCodec(ZStandard, codecOptions{}, codecModeDecode)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		compressed := codec.Encode(input)
-		_, decodeErr := codec.Decode(compressed)
+		compressed := encoder.Encode(input)
+		_, decodeErr := decoder.Decode(compressed)
 		require.NoError(b, decodeErr)
 	}
 }
 
 func verifyZstdEncodeDecode(t *testing.T, input []byte) {
-	codec, err := resolveCodec(ZStandard, codecOptions{})
+	encoder, err := resolveCodec(ZStandard, codecOptions{}, codecModeEncode)
+	require.NoError(t, err)
+	decoder, err := resolveCodec(ZStandard, codecOptions{}, codecModeDecode)
 	require.NoError(t, err)
 
-	compressed := codec.Encode(input)
-	actual, decodeErr := codec.Decode(compressed)
+	compressed := encoder.Encode(input)
+	actual, decodeErr := decoder.Decode(compressed)
 
 	require.NoError(t, decodeErr)
 	assert.Equal(t, input, actual)
@@ -117,45 +123,52 @@ func TestZstdSharedEncoder(t *testing.T) {
 	require.NoError(t, err)
 	defer dec.Close()
 
-	// Create two codecs sharing the same encoder/decoder
-	codec1, err := resolveCodec(ZStandard, codecOptions{
-		ZStandardOptions: zstdOptions{
-			Encoder: enc,
-			Decoder: dec,
-		},
-	})
+	// Create encoder codecs sharing the same zstd encoder
+	encoder1, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Encoder: enc},
+	}, codecModeEncode)
 	require.NoError(t, err)
 
-	codec2, err := resolveCodec(ZStandard, codecOptions{
-		ZStandardOptions: zstdOptions{
-			Encoder: enc,
-			Decoder: dec,
-		},
-	})
+	encoder2, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Encoder: enc},
+	}, codecModeEncode)
 	require.NoError(t, err)
 
-	// Both should work correctly
-	compressed1 := codec1.Encode(input)
-	compressed2 := codec2.Encode(input)
+	// Create decoder codecs sharing the same zstd decoder
+	decoder1, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Decoder: dec},
+	}, codecModeDecode)
+	require.NoError(t, err)
 
-	actual1, err := codec1.Decode(compressed1)
+	decoder2, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Decoder: dec},
+	}, codecModeDecode)
+	require.NoError(t, err)
+
+	// Both encoders should work correctly
+	compressed1 := encoder1.Encode(input)
+	compressed2 := encoder2.Encode(input)
+
+	actual1, err := decoder1.Decode(compressed1)
 	require.NoError(t, err)
 	assert.Equal(t, input, actual1)
 
-	actual2, err := codec2.Decode(compressed2)
+	actual2, err := decoder2.Decode(compressed2)
 	require.NoError(t, err)
 	assert.Equal(t, input, actual2)
 
 	// Cross-decode should also work
-	actual3, err := codec1.Decode(compressed2)
+	actual3, err := decoder1.Decode(compressed2)
 	require.NoError(t, err)
 	assert.Equal(t, input, actual3)
 
 	// Closing codecs should not close the shared encoder/decoder
-	codec1.(*ZStandardCodec).Close()
-	codec2.(*ZStandardCodec).Close()
+	encoder1.(*ZStandardCodec).Close()
+	encoder2.(*ZStandardCodec).Close()
+	decoder1.(*ZStandardCodec).Close()
+	decoder2.(*ZStandardCodec).Close()
 
-	// Shared encoder should still work after codec close
+	// Shared encoder/decoder should still work after codec close
 	compressed3 := enc.EncodeAll(input, nil)
 	actual4, err := dec.DecodeAll(compressed3, nil)
 	require.NoError(t, err)

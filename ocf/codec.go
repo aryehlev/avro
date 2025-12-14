@@ -8,10 +8,16 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"sync"
 
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
+)
+
+type codecMode int
+
+const (
+	codecModeEncode codecMode = iota
+	codecModeDecode
 )
 
 // CodecName represents a compression codec name.
@@ -39,7 +45,7 @@ type zstdOptions struct {
 	Decoder *zstd.Decoder
 }
 
-func resolveCodec(name CodecName, codecOpts codecOptions) (Codec, error) {
+func resolveCodec(name CodecName, codecOpts codecOptions, mode codecMode) (Codec, error) {
 	switch name {
 	case Null, "":
 		return &NullCodec{}, nil
@@ -51,7 +57,7 @@ func resolveCodec(name CodecName, codecOpts codecOptions) (Codec, error) {
 		return &SnappyCodec{}, nil
 
 	case ZStandard:
-		return newZStandardCodec(codecOpts.ZStandardOptions), nil
+		return newZStandardCodec(codecOpts.ZStandardOptions, mode)
 
 	default:
 		return nil, fmt.Errorf("unknown codec %s", name)
@@ -142,63 +148,65 @@ func (*SnappyCodec) Encode(b []byte) []byte {
 }
 
 // ZStandardCodec is a zstandard compression codec.
-// It uses lazy initialization to only allocate encoder/decoder when needed.
+// It creates only an encoder or decoder based on mode, not both.
 type ZStandardCodec struct {
-	decoder     *zstd.Decoder
-	encoder     *zstd.Encoder
-	decoderOnce sync.Once
-	encoderOnce sync.Once
-	eOpts       []zstd.EOption
-	dOpts       []zstd.DOption
-	// ownsEncoder/ownsDecoder track whether we created these and should close them.
-	ownsEncoder bool
-	ownsDecoder bool
+	decoder *zstd.Decoder
+	encoder *zstd.Encoder
+	// owns tracks whether we created the encoder/decoder and should close it.
+	owns bool
 }
 
-func newZStandardCodec(opts zstdOptions) *ZStandardCodec {
-	c := &ZStandardCodec{
-		eOpts: opts.EOptions,
-		dOpts: opts.DOptions,
+func newZStandardCodec(opts zstdOptions, mode codecMode) (*ZStandardCodec, error) {
+	c := &ZStandardCodec{}
+
+	switch mode {
+	case codecModeEncode:
+		if opts.Encoder != nil {
+			c.encoder = opts.Encoder
+		} else {
+			enc, err := zstd.NewWriter(nil, opts.EOptions...)
+			if err != nil {
+				return nil, err
+			}
+			c.encoder = enc
+			c.owns = true
+		}
+	case codecModeDecode:
+		if opts.Decoder != nil {
+			c.decoder = opts.Decoder
+		} else {
+			dec, err := zstd.NewReader(nil, opts.DOptions...)
+			if err != nil {
+				return nil, err
+			}
+			c.decoder = dec
+			c.owns = true
+		}
 	}
-	// Use shared encoder/decoder if provided.
-	if opts.Encoder != nil {
-		c.encoder = opts.Encoder
-		c.encoderOnce.Do(func() {}) // Mark as initialized
-	} else {
-		c.ownsEncoder = true
-	}
-	if opts.Decoder != nil {
-		c.decoder = opts.Decoder
-		c.decoderOnce.Do(func() {}) // Mark as initialized
-	} else {
-		c.ownsDecoder = true
-	}
-	return c
+
+	return c, nil
 }
 
 // Decode decodes the given bytes.
 func (c *ZStandardCodec) Decode(b []byte) ([]byte, error) {
-	c.decoderOnce.Do(func() {
-		c.decoder, _ = zstd.NewReader(nil, c.dOpts...)
-	})
 	return c.decoder.DecodeAll(b, nil)
 }
 
 // Encode encodes the given bytes.
 func (c *ZStandardCodec) Encode(b []byte) []byte {
-	c.encoderOnce.Do(func() {
-		c.encoder, _ = zstd.NewWriter(nil, c.eOpts...)
-	})
 	return c.encoder.EncodeAll(b, nil)
 }
 
-// Close closes the zstandard encoder and decoder, releasing resources.
-// If the encoder/decoder were provided externally (shared), they are not closed.
+// Close closes the zstandard encoder or decoder, releasing resources.
+// If the encoder/decoder was provided externally (shared), it is not closed.
 func (c *ZStandardCodec) Close() error {
-	if c.decoder != nil && c.ownsDecoder {
+	if !c.owns {
+		return nil
+	}
+	if c.decoder != nil {
 		c.decoder.Close()
 	}
-	if c.encoder != nil && c.ownsEncoder {
+	if c.encoder != nil {
 		return c.encoder.Close()
 	}
 	return nil
