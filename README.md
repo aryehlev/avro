@@ -192,21 +192,13 @@ type Record struct {
 
 **Supported options:**
 
-* **zerodefault:** When encoding, if the field value is the zero value for its type, encode the schema's
-  default value instead. If the schema has no default, the tag is ignored and the value is encoded normally.
+* **omitempty:** When encoding, if the field value is empty (zero value for its type) and the schema
+  is a nullable union, encode null instead of the value. This matches the behavior of `encoding/json`.
 
 ```go
-// Schema with null default - zero encodes as null:
-// {"name": "count", "type": ["null", "long"], "default": null}
-type Example1 struct {
-    Count int64  `avro:"count,zerodefault"` // 0 encodes as null
-    Name  string `avro:"name"`
-}
-
-// Schema with non-null default - zero encodes as the default value:
-// {"name": "count", "type": "long", "default": 100}
-type Example2 struct {
-    Count int64  `avro:"count,zerodefault"` // 0 encodes as 100
+// Schema: {"name": "count", "type": ["null", "long"], "default": null}
+type Example struct {
+    Count int64  `avro:"count,omitempty"` // 0 encodes as null
     Name  string `avro:"name"`
 }
 ```

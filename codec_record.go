@@ -168,13 +168,10 @@ func encoderOfStruct(e *encoderContext, rec *RecordSchema, typ reflect2.Type) Va
 	for _, field := range rec.Fields() {
 		sf := structDesc.Fields.Get(field.Name())
 		if sf != nil {
-			fieldType := sf.Field[len(sf.Field)-1].Type()
 			e.omitEmpty = sf.OmitEmpty
-			encoder := encoderOfType(e, field.Type(), fieldType)
-
 			fields = append(fields, &structFieldEncoder{
 				field:   sf.Field,
-				encoder: encoder,
+				encoder: encoderOfType(e, field.Type(), sf.Field[len(sf.Field)-1].Type()),
 			})
 			continue
 		}
