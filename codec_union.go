@@ -363,30 +363,25 @@ func encoderOfNullableUnion(e *encoderContext, schema Schema, typ reflect2.Type)
 	var (
 		baseTyp reflect2.Type
 		isPtr   bool
-		isEmpty func(unsafe.Pointer) bool
 	)
 	switch v := typ.(type) {
 	case *reflect2.UnsafePtrType:
 		baseTyp = v.Elem()
 		isPtr = true
-		isEmpty = v.UnsafeIsNil
 	case *reflect2.UnsafeSliceType:
 		baseTyp = v
-		if e.omitEmpty {
-			isEmpty = isEmptyFunc(typ)
-		} else {
-			isEmpty = func(ptr unsafe.Pointer) bool { return *((*unsafe.Pointer)(ptr)) == nil }
-		}
 	default:
-		// non-pointer type (omitempty case)
 		baseTyp = typ
+	}
+
+	isEmpty := func(ptr unsafe.Pointer) bool { return *((*unsafe.Pointer)(ptr)) == nil }
+	if e.omitEmpty {
 		isEmpty = isEmptyFunc(typ)
 	}
-	encoder := encoderOfType(e, union.Types()[typeIdx], baseTyp)
 
 	return &unionNullableEncoder{
 		schema:  union,
-		encoder: encoder,
+		encoder: encoderOfType(e, union.Types()[typeIdx], baseTyp),
 		isPtr:   isPtr,
 		nullIdx: int32(nullIdx),
 		typeIdx: int32(typeIdx),
