@@ -169,27 +169,8 @@ func encoderOfStruct(e *encoderContext, rec *RecordSchema, typ reflect2.Type) Va
 		sf := structDesc.Fields.Get(field.Name())
 		if sf != nil {
 			fieldType := sf.Field[len(sf.Field)-1].Type()
+			e.omitEmpty = sf.OmitEmpty
 			encoder := encoderOfType(e, field.Type(), fieldType)
-			// omitempty: if value is empty and schema is nullable union, write null
-			// For pointer types, the regular encoder already handles nil → null
-			// For non-pointer types, we need the omitEmptyEncoder wrapper
-			if sf.OmitEmpty && field.Type().Type() == Union && field.Type().(*UnionSchema).Nullable() && fieldType.Kind() != reflect.Ptr {
-				union := field.Type().(*UnionSchema)
-				nullIdx, typeIdx := union.Indices()
-
-				// Get the non-null schema from the union
-				nonNullSchema := union.Types()[typeIdx]
-
-				// Create encoder for the non-null type directly (without union index writing)
-				innerEncoder := encoderOfType(e, nonNullSchema, fieldType)
-
-				encoder = &omitEmptyEncoder{
-					encoder: innerEncoder,
-					nullIdx: int32(nullIdx),
-					typeIdx: int32(typeIdx),
-					isEmpty: isEmptyFunc(fieldType),
-				}
-			}
 
 			fields = append(fields, &structFieldEncoder{
 				field:   sf.Field,

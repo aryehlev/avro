@@ -7,25 +7,6 @@ import (
 	"github.com/modern-go/reflect2"
 )
 
-// omitEmptyEncoder wraps an encoder for nullable union fields with the omitempty tag.
-// When the value is empty (zero), it writes null. Otherwise, it writes the type index and value.
-// Only used for non-pointer types; pointer types use the regular unionNullableEncoder.
-type omitEmptyEncoder struct {
-	encoder ValEncoder
-	nullIdx int32
-	typeIdx int32
-	isEmpty func(unsafe.Pointer) bool
-}
-
-func (e *omitEmptyEncoder) Encode(ptr unsafe.Pointer, w *Writer) {
-	if e.isEmpty(ptr) {
-		w.WriteInt(e.nullIdx)
-		return
-	}
-	w.WriteInt(e.typeIdx)
-	e.encoder.Encode(ptr, w)
-}
-
 // isEmptyFunc returns an efficient zero-check function for the given type.
 // This matches the behavior of encoding/json's omitempty and is similar to
 // jsoniter's IsEmpty implementation: https://github.com/json-iterator/go/blob/master/reflect_native.go

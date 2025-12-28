@@ -106,8 +106,9 @@ func newDecoderContext(cfg *frozenConfig) *decoderContext {
 }
 
 type encoderContext struct {
-	cfg      *frozenConfig
-	encoders map[cacheKey]ValEncoder
+	cfg       *frozenConfig
+	encoders  map[cacheKey]ValEncoder
+	omitEmpty bool
 }
 
 func newEncoderContext(cfg *frozenConfig) *encoderContext {
