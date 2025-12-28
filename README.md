@@ -179,6 +179,30 @@ e.g `"map:string"`. Behavior when a type cannot be resolved will depend on your 
 	* !Config.UnionResolutionError && Config.PartialUnionTypeResolution: any registered type will get resolved while any unregistered type will fallback to the map type above.
 	* Config.UnionResolutionError && !Config.PartialUnionTypeResolution: any registered type will get resolved while any unregistered type will return an error.
 
+##### Struct Tags
+
+The `avro` struct tag is used to specify the Avro field name for a Go struct field. Additional options
+can be specified after the field name, separated by a comma:
+
+```go
+type Record struct {
+    Field string `avro:"field_name,option1,option2"`
+}
+```
+
+**Supported options:**
+
+* **omitempty:** When encoding, if the field value is empty (zero value for its type) and the schema
+  is a nullable union, encode null instead of the value. This matches the behavior of `encoding/json`.
+
+```go
+// Schema: {"name": "count", "type": ["null", "long"], "default": null}
+type Example struct {
+    Count int64  `avro:"count,omitempty"` // 0 encodes as null
+    Name  string `avro:"name"`
+}
+```
+
 ##### TextMarshaler and TextUnmarshaler
 
 The interfaces `TextMarshaler` and `TextUnmarshaler` are supported for a `string` schema type. The object will

@@ -168,6 +168,7 @@ func encoderOfStruct(e *encoderContext, rec *RecordSchema, typ reflect2.Type) Va
 	for _, field := range rec.Fields() {
 		sf := structDesc.Fields.Get(field.Name())
 		if sf != nil {
+			e.omitEmpty = sf.OmitEmpty
 			fields = append(fields, &structFieldEncoder{
 				field:   sf.Field,
 				encoder: encoderOfType(e, field.Type(), sf.Field[len(sf.Field)-1].Type()),
@@ -441,8 +442,9 @@ func (sf structFields) Get(name string) *structField {
 }
 
 type structField struct {
-	Name  string
-	Field []*reflect2.UnsafeStructField
+	Name      string
+	Field     []*reflect2.UnsafeStructField
+	OmitEmpty bool
 
 	anon *reflect2.UnsafeStructType
 }
@@ -493,13 +495,17 @@ func describeStruct(tagKey string, typ reflect2.Type) *structDescriptor {
 				}
 
 				fieldName := field.Name()
+				var omitEmpty bool
 				if tag, ok := field.Tag().Lookup(tagKey); ok {
-					fieldName, _, _ = strings.Cut(tag, ",")
+					var opts string
+					fieldName, opts, _ = strings.Cut(tag, ",")
+					omitEmpty = strings.Contains(opts, "omitempty")
 				}
 
 				fields = append(fields, &structField{
-					Name:  fieldName,
-					Field: chain,
+					Name:      fieldName,
+					Field:     chain,
+					OmitEmpty: omitEmpty,
 				})
 			}
 		}
