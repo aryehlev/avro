@@ -166,6 +166,8 @@ func encoderOfStruct(e *encoderContext, rec *RecordSchema, typ reflect2.Type) Va
 
 	fields := make([]*structFieldEncoder, 0, len(rec.Fields()))
 	for _, field := range rec.Fields() {
+		// Reset omitEmpty for each field - it should only apply to fields with the tag
+		e.omitEmpty = false
 		sf := structDesc.Fields.Get(field.Name())
 		if sf != nil {
 			e.omitEmpty = sf.OmitEmpty

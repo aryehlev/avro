@@ -4182,3 +4182,238 @@ func TestEncoder_OmitEmpty_VeryLargeRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, buf.Len() > 1000000)
 }
+
+// ============================================================================
+// Regression tests for omitempty flag leaking to subsequent fields
+// Issue: "Cannot resolve: "null" with "string"" error
+// ============================================================================
+
+// TestEncoder_OmitEmpty_DoesNotLeakToNextField verifies that omitempty on field A
+// does not affect the encoding of field B (a non-nullable string).
+// This was causing "Cannot resolve: "null" with "string"" errors.
+func TestEncoder_OmitEmpty_DoesNotLeakToNextField(t *testing.T) {
+	defer ConfigTeardown()
+
+	// Field A has omitempty, Field B is a non-nullable string
+	type EncodeRecord struct {
+		A int64  `avro:"a,omitempty"`
+		B string `avro:"b"` // No omitempty - should always encode as string
+	}
+
+	// Use pointer for decoding union types
+	type DecodeRecord struct {
+		A *int64 `avro:"a"`
+		B string `avro:"b"`
+	}
+
+	schema := `{
+	"type": "record",
+	"name": "test",
+	"fields" : [
+		{"name": "a", "type": ["null", "long"], "default": null},
+		{"name": "b", "type": "string"}
+	]
+}`
+
+	// Test with empty string for B - this should NOT encode as null
+	obj := EncodeRecord{A: 0, B: ""}
+	buf := &bytes.Buffer{}
+	enc, err := avro.NewEncoder(schema, buf)
+	require.NoError(t, err)
+
+	err = enc.Encode(obj)
+	require.NoError(t, err)
+
+	// Decode and verify - if omitempty leaked, this would fail with
+	// "Cannot resolve: "null" with "string""
+	var decoded DecodeRecord
+	dec, err := avro.NewDecoder(schema, bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+
+	err = dec.Decode(&decoded)
+	require.NoError(t, err)
+	assert.Equal(t, "", decoded.B) // Should be empty string, not cause an error
+}
+
+// TestEncoder_OmitEmpty_DoesNotLeakToSchemaDefaultUnion verifies that omitempty on a struct field
+// does not leak to a schema field that uses a default value with union type (not present in struct).
+// This is the exact scenario causing "Cannot resolve: "null" with "string"" in production.
+func TestEncoder_OmitEmpty_DoesNotLeakToSchemaDefaultUnion(t *testing.T) {
+	defer ConfigTeardown()
+
+	// Struct has field A with omitempty, but schema has additional field "extra"
+	// that should use its schema default (empty string in a union)
+	type Record struct {
+		A int64  `avro:"a,omitempty"`
+		B string `avro:"b"`
+	}
+
+	// Schema has an extra nullable string field with empty string default
+	// This is the problematic case: ["string", "null"] with default ""
+	schema := `{
+	"type": "record",
+	"name": "test",
+	"fields" : [
+		{"name": "a", "type": ["null", "long"], "default": null},
+		{"name": "extra", "type": ["string", "null"], "default": ""},
+		{"name": "b", "type": "string"}
+	]
+}`
+
+	obj := Record{A: 0, B: "test"}
+	buf := &bytes.Buffer{}
+	enc, err := avro.NewEncoder(schema, buf)
+	require.NoError(t, err)
+
+	err = enc.Encode(obj)
+	require.NoError(t, err)
+
+	// Decode into a map to verify all fields
+	// If omitempty leaked, "extra" would be null instead of "" causing decode error
+	var decoded map[string]any
+	dec, err := avro.NewDecoder(schema, bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+
+	err = dec.Decode(&decoded)
+	require.NoError(t, err)
+
+	// "extra" should be the default empty string, not null
+	assert.Equal(t, "", decoded["extra"])
+	assert.Equal(t, "test", decoded["b"])
+}
+
+// TestEncoder_OmitEmpty_DoesNotLeakToSchemaDefault verifies that omitempty on a struct field
+// does not leak to a schema field that uses a default value (not present in struct).
+func TestEncoder_OmitEmpty_DoesNotLeakToSchemaDefault(t *testing.T) {
+	defer ConfigTeardown()
+
+	type Record struct {
+		A int64  `avro:"a,omitempty"`
+		B string `avro:"b"`
+	}
+
+	// Schema has an extra field "extra" with a string default that doesn't exist in struct
+	schema := `{
+	"type": "record",
+	"name": "test",
+	"fields" : [
+		{"name": "a", "type": ["null", "long"], "default": null},
+		{"name": "extra", "type": "string", "default": "default_value"},
+		{"name": "b", "type": "string"}
+	]
+}`
+
+	obj := Record{A: 0, B: "test"}
+	buf := &bytes.Buffer{}
+	enc, err := avro.NewEncoder(schema, buf)
+	require.NoError(t, err)
+
+	err = enc.Encode(obj)
+	require.NoError(t, err)
+
+	// Decode into a map to verify all fields
+	var decoded map[string]any
+	dec, err := avro.NewDecoder(schema, bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+
+	err = dec.Decode(&decoded)
+	require.NoError(t, err)
+
+	// "extra" should be the default string value, not null
+	assert.Equal(t, "default_value", decoded["extra"])
+	assert.Equal(t, "test", decoded["b"])
+}
+
+// TestEncoder_OmitEmpty_MultipleFieldsDoNotLeak tests multiple omitempty fields
+// followed by non-nullable fields to ensure no leakage between any of them.
+func TestEncoder_OmitEmpty_MultipleFieldsDoNotLeak(t *testing.T) {
+	defer ConfigTeardown()
+
+	type Record struct {
+		A int64  `avro:"a,omitempty"` // omitempty
+		B string `avro:"b"`           // no omitempty - non-nullable
+		C int64  `avro:"c,omitempty"` // omitempty
+		D string `avro:"d"`           // no omitempty - non-nullable
+	}
+
+	schema := `{
+	"type": "record",
+	"name": "test",
+	"fields" : [
+		{"name": "a", "type": ["null", "long"], "default": null},
+		{"name": "b", "type": "string"},
+		{"name": "c", "type": ["null", "long"], "default": null},
+		{"name": "d", "type": "string"}
+	]
+}`
+
+	// All zero/empty values
+	obj := Record{A: 0, B: "", C: 0, D: ""}
+	buf := &bytes.Buffer{}
+	enc, err := avro.NewEncoder(schema, buf)
+	require.NoError(t, err)
+
+	err = enc.Encode(obj)
+	require.NoError(t, err)
+
+	// Decode and verify all fields
+	var decoded Record
+	dec, err := avro.NewDecoder(schema, bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+
+	err = dec.Decode(&decoded)
+	require.NoError(t, err)
+
+	// Non-nullable strings should be empty strings, not cause null errors
+	assert.Equal(t, "", decoded.B)
+	assert.Equal(t, "", decoded.D)
+}
+
+// TestEncoder_OmitEmpty_RealWorldScenario simulates the production error scenario
+// where a record has multiple fields, some with omitempty, followed by schema-default fields.
+func TestEncoder_OmitEmpty_RealWorldScenario(t *testing.T) {
+	defer ConfigTeardown()
+
+	// Simulates a real-world record where some fields have omitempty
+	// and the schema has additional fields with defaults not in the struct
+	type HttpRecord struct {
+		Method     string `avro:"method"`
+		StatusCode int64  `avro:"status_code,omitempty"`
+		Path       string `avro:"path"`
+	}
+
+	// Schema has an extra field "dsp_factor_in" (simulating the production error)
+	// The field uses a nullable union with empty string default
+	schema := `{
+	"type": "record",
+	"name": "http_record",
+	"fields" : [
+		{"name": "method", "type": "string"},
+		{"name": "status_code", "type": ["null", "long"], "default": null},
+		{"name": "dsp_factor_in", "type": ["string", "null"], "default": ""},
+		{"name": "path", "type": "string"}
+	]
+}`
+
+	obj := HttpRecord{Method: "GET", StatusCode: 0, Path: "/api/test"}
+	buf := &bytes.Buffer{}
+	enc, err := avro.NewEncoder(schema, buf)
+	require.NoError(t, err)
+
+	err = enc.Encode(obj)
+	require.NoError(t, err)
+
+	// This decode would fail with "Cannot resolve: "null" with "string""
+	// if omitempty leaked to dsp_factor_in
+	var decoded map[string]any
+	dec, err := avro.NewDecoder(schema, bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+
+	err = dec.Decode(&decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, "GET", decoded["method"])
+	assert.Nil(t, decoded["status_code"])         // omitempty made this null
+	assert.Equal(t, "", decoded["dsp_factor_in"]) // Should be empty string, NOT null
+	assert.Equal(t, "/api/test", decoded["path"])
+}
