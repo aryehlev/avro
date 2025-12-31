@@ -500,7 +500,11 @@ func describeStruct(tagKey string, typ reflect2.Type) *structDescriptor {
 				var omitEmpty bool
 				if tag, ok := field.Tag().Lookup(tagKey); ok {
 					var opts string
-					fieldName, opts, _ = strings.Cut(tag, ",")
+					name, opts, _ := strings.Cut(tag, ",")
+					name = strings.TrimSpace(name)
+					if name != "" {
+						fieldName = name
+					}
 					omitEmpty = strings.Contains(opts, "omitempty")
 				}
 
