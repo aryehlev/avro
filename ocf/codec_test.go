@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,7 @@ benchmark results always creating a new zstd encoder/decoder
 
 goos: linux
 goarch: amd64
-pkg: github.com/hamba/avro/v2/ocf
+pkg: github.com/aryehlev/avro/v2/ocf
 cpu: AMD Ryzen 5 3550H with Radeon Vega Mobile Gfx
 
 
@@ -108,4 +109,68 @@ func makeTestData(length int, charMaker func() byte) []byte {
 		input[i] = charMaker()
 	}
 	return input
+}
+
+func TestZstdSharedEncoder(t *testing.T) {
+	input := makeTestData(8762, func() byte { return 'a' })
+
+	// Create shared encoder/decoder
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	require.NoError(t, err)
+	defer enc.Close()
+
+	dec, err := zstd.NewReader(nil)
+	require.NoError(t, err)
+	defer dec.Close()
+
+	// Create encoder codecs sharing the same zstd encoder
+	encoder1, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Encoder: enc},
+	}, codecModeEncode)
+	require.NoError(t, err)
+
+	encoder2, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Encoder: enc},
+	}, codecModeEncode)
+	require.NoError(t, err)
+
+	// Create decoder codecs sharing the same zstd decoder
+	decoder1, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Decoder: dec},
+	}, codecModeDecode)
+	require.NoError(t, err)
+
+	decoder2, err := resolveCodec(ZStandard, codecOptions{
+		ZStandardOptions: zstdOptions{Decoder: dec},
+	}, codecModeDecode)
+	require.NoError(t, err)
+
+	// Both encoders should work correctly
+	compressed1 := encoder1.Encode(input)
+	compressed2 := encoder2.Encode(input)
+
+	actual1, err := decoder1.Decode(compressed1)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual1)
+
+	actual2, err := decoder2.Decode(compressed2)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual2)
+
+	// Cross-decode should also work
+	actual3, err := decoder1.Decode(compressed2)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual3)
+
+	// Closing codecs should not close the shared encoder/decoder
+	encoder1.(*ZStandardCodec).Close()
+	encoder2.(*ZStandardCodec).Close()
+	decoder1.(*ZStandardCodec).Close()
+	decoder2.(*ZStandardCodec).Close()
+
+	// Shared encoder/decoder should still work after codec close
+	compressed3 := enc.EncodeAll(input, nil)
+	actual4, err := dec.DecodeAll(compressed3, nil)
+	require.NoError(t, err)
+	assert.Equal(t, input, actual4)
 }

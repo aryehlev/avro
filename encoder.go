@@ -31,8 +31,7 @@ func (e *Encoder) Encode(v any) error {
 	return e.w.Error
 }
 
-// Reset resets the encoder to write to a new io.Writer.
-// This allows reusing the encoder for multiple destinations with the same schema.
+// Reset resets the Encoder with a new io.Writer attached.
 func (e *Encoder) Reset(w io.Writer) {
 	e.w.Reset(w)
 }
